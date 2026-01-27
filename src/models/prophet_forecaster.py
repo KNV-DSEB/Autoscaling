@@ -183,7 +183,7 @@ class ProphetForecaster:
 
         Args:
             periods: Số periods cần forecast
-            freq: Frequency (vd: '1min', '5min', '15min', '1H')
+            freq: Frequency (vd: '1min', '5min', '15min', '1h')
             include_history: Include historical predictions
 
         Returns:

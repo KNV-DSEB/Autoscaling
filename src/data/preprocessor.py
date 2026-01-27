@@ -37,7 +37,7 @@ class LogPreprocessor:
 
     Usage:
         >>> preprocessor = LogPreprocessor(parsed_df)
-        >>> ts_1min = preprocessor.aggregate_timeseries('1T')
+        >>> ts_1min = preprocessor.aggregate_timeseries('1min')
         >>> all_ts = preprocessor.create_all_granularities()
     """
 
@@ -103,7 +103,7 @@ class LogPreprocessor:
 
     def aggregate_timeseries(
         self,
-        freq: str = '1T',
+        freq: str = '1min',
         fill_gaps: bool = True,
         mark_storm: bool = True
     ) -> pd.DataFrame:
@@ -112,10 +112,10 @@ class LogPreprocessor:
 
         Args:
             freq: Pandas frequency string:
-                - '1T' hoặc '1min': 1 phút
-                - '5T' hoặc '5min': 5 phút
-                - '15T' hoặc '15min': 15 phút
-                - '1H': 1 giờ
+                - '1min': 1 phút
+                - '5min': 5 phút
+                - '15min': 15 phút
+                - '1h': 1 giờ
             fill_gaps: Fill các timestamps missing với 0
             mark_storm: Đánh dấu storm period với cột is_storm_period
 
@@ -212,9 +212,9 @@ class LogPreprocessor:
         print("Tạo time series với các granularities...")
 
         granularities = {
-            '1min': '1T',
-            '5min': '5T',
-            '15min': '15T'
+            '1min': '1min',
+            '5min': '5min',
+            '15min': '15min'
         }
 
         results = {}
@@ -265,7 +265,7 @@ class LogPreprocessor:
             }
         }
 
-    def detect_gaps(self, freq: str = '1T', threshold_minutes: int = 5) -> pd.DataFrame:
+    def detect_gaps(self, freq: str = '1min', threshold_minutes: int = 5) -> pd.DataFrame:
         """
         Phát hiện các gaps trong dữ liệu (ngoài storm period).
 
