@@ -31,7 +31,7 @@ class TestNASALogParser:
         assert result['host'] == '199.72.81.55'
         assert result['method'] == 'GET'
         assert result['url'] == '/history/apollo/'
-        assert result['status'] == 200
+        assert result['status_code'] == 200
         assert result['bytes'] == 6245
 
     def test_parse_line_with_dash_bytes(self, parser):
@@ -89,7 +89,7 @@ class TestNASALogParser:
             result = parser.parse_line(line)
 
             assert result is not None
-            assert result['status'] == code
+            assert result['status_code'] == code
 
     def test_extract_url_components(self, parser):
         """Test extract URL components."""
@@ -126,10 +126,10 @@ class TestParserStatistics:
         for line in lines:
             parser.parse_line(line)
 
-        stats = parser.get_statistics()
-        assert stats['total_lines'] == 3
-        assert stats['valid_lines'] == 2
-        assert stats['invalid_lines'] == 1
+        stats = parser.get_stats()
+        assert stats['total'] == 3
+        assert stats['success'] == 2
+        assert stats['failed'] == 1
 
 
 if __name__ == '__main__':

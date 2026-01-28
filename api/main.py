@@ -465,35 +465,39 @@ async def run_simulation(request: SimulationRequest):
         # Use test data
         df_clean = df[df['is_storm_period'] == 0]
         test_mask = df_clean.index >= '1995-08-23'
-        actual_demand = df_clean.loc[test_mask, 'request_count']
+        test_data = df_clean.loc[test_mask]
 
         # Generate predictions if predictive
-        predicted_demand = None
-        if request.strategy == "predictive":
-            # Use rolling mean as simple prediction
-            predicted_demand = actual_demand.rolling(4).mean().shift(1).fillna(method='bfill')
+        predictions = None
+        use_predictive = request.strategy == "predictive"
+        if use_predictive:
+            predictions = test_data.copy()
+            predictions['request_count'] = predictions['request_count'].rolling(4).mean().shift(1).bfill()
 
         # Run simulation
-        result = simulator.run_simulation(
-            actual_demand=actual_demand,
-            predicted_demand=predicted_demand,
-            initial_servers=request.initial_servers,
-            freq_minutes=15
+        sim_df = simulator.simulate(
+            actual_data=test_data,
+            predictions=predictions,
+            use_predictive=use_predictive,
+            initial_servers=request.initial_servers
         )
+
+        # Calculate metrics
+        metrics = simulator.calculate_metrics(sim_df)
 
         return SimulationResponse(
             strategy=request.strategy,
-            total_cost=result.total_cost,
-            average_servers=result.average_servers,
-            peak_servers=result.peak_servers,
-            min_servers=result.min_servers,
-            scaling_events=result.scaling_events,
-            sla_violations=result.sla_violations,
-            dropped_requests=result.dropped_requests,
+            total_cost=metrics['total_cost'],
+            average_servers=metrics['avg_servers'],
+            peak_servers=metrics['max_servers'],
+            min_servers=metrics['min_servers'],
+            scaling_events=metrics['total_scaling_events'],
+            sla_violations=metrics['overloaded_periods'],
+            dropped_requests=int(metrics['total_dropped_requests']),
             timeline_summary={
-                "intervals": len(result.timeline),
-                "start": str(actual_demand.index[0]),
-                "end": str(actual_demand.index[-1])
+                "intervals": len(sim_df),
+                "start": str(test_data.index[0]),
+                "end": str(test_data.index[-1])
             }
         )
 
@@ -521,6 +525,7 @@ async def detect_anomalies(request: AnomalyDetectionRequest):
         traffic = df['request_count']
 
         # Run detection based on method
+        scores = None
         if request.method == "zscore":
             anomalies_mask = detector.detect_zscore(traffic, threshold=request.threshold)
         elif request.method == "iqr":
@@ -539,7 +544,7 @@ async def detect_anomalies(request: AnomalyDetectionRequest):
             anomalies.append(AnomalyPoint(
                 timestamp=idx,
                 value=float(traffic[idx]),
-                score=float(scores[idx]) if request.method == "combined" else request.threshold,
+                score=float(scores[idx]) if scores is not None else request.threshold,
                 type="high" if traffic[idx] > traffic.mean() else "low"
             ))
 

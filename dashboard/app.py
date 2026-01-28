@@ -525,32 +525,37 @@ def render_autoscaling_tab(df):
 
                 # Use test data
                 test_mask = df_clean.index >= '1995-08-23'
-                actual_demand = df_clean.loc[test_mask, 'request_count']
+                test_data = df_clean.loc[test_mask]
 
                 # Predictions
-                predicted_demand = None
-                if strategy == "Predictive":
-                    predicted_demand = actual_demand.rolling(4).mean().shift(1).fillna(method='bfill')
+                predictions = None
+                use_predictive = strategy == "Predictive"
+                if use_predictive:
+                    predictions = test_data.copy()
+                    predictions['request_count'] = predictions['request_count'].rolling(4).mean().shift(1).bfill()
 
-                result = simulator.run_simulation(
-                    actual_demand=actual_demand,
-                    predicted_demand=predicted_demand,
-                    initial_servers=initial_servers,
-                    freq_minutes=15
+                sim_df = simulator.simulate(
+                    actual_data=test_data,
+                    predictions=predictions,
+                    use_predictive=use_predictive,
+                    initial_servers=initial_servers
                 )
+
+                # Calculate metrics
+                metrics = simulator.calculate_metrics(sim_df)
 
                 # Display results
                 st.subheader("Simulation Results")
 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Total Cost", f"${result.total_cost:.2f}")
+                    st.metric("Total Cost", f"${metrics['total_cost']:.2f}")
                 with col2:
-                    st.metric("Avg Servers", f"{result.average_servers:.1f}")
+                    st.metric("Avg Servers", f"{metrics['avg_servers']:.1f}")
                 with col3:
-                    st.metric("Scaling Events", result.scaling_events)
+                    st.metric("Scaling Events", metrics['total_scaling_events'])
                 with col4:
-                    st.metric("SLA Violations", result.sla_violations)
+                    st.metric("SLA Violations", metrics['overloaded_periods'])
 
                 # Timeline plot
                 fig = make_subplots(
@@ -562,8 +567,8 @@ def render_autoscaling_tab(df):
                 # Demand
                 fig.add_trace(
                     go.Scatter(
-                        x=actual_demand.index,
-                        y=actual_demand.values,
+                        x=sim_df.index,
+                        y=sim_df['actual_requests'].values,
                         name="Demand",
                         line=dict(color='blue')
                     ),
@@ -571,11 +576,10 @@ def render_autoscaling_tab(df):
                 )
 
                 # Servers
-                servers = result.timeline['servers']
                 fig.add_trace(
                     go.Scatter(
-                        x=actual_demand.index[:len(servers)],
-                        y=servers,
+                        x=sim_df.index,
+                        y=sim_df['servers'].values,
                         name="Servers",
                         line=dict(color='orange')
                     ),

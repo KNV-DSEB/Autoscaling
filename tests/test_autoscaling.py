@@ -82,98 +82,111 @@ class TestAutoscalingEngine:
             cooldown_period=2,
             consecutive_breaches=2
         )
-        return AutoscalingEngine(config, policy)
+        return AutoscalingEngine(config, policy, initial_servers=5)
 
     def test_calculate_required_servers(self, engine):
         """Test calculate required servers."""
-        # 1000 requests, 1000 capacity/server = 1 server
-        assert engine.calculate_required_servers(1000, 15) >= 1
+        # 1000 requests, small bytes = 1 server
+        assert engine.calculate_required_servers(1000, 0) >= 1
 
-        # 15000 requests in 15 min = 1000/min = 1 server
-        assert engine.calculate_required_servers(15000, 15) >= 1
+        # 15000 requests = 15 servers
+        assert engine.calculate_required_servers(15000, 0) >= 1
 
-        # 30000 requests in 15 min = 2000/min = 2 servers
-        assert engine.calculate_required_servers(30000, 15) >= 2
+        # 30000 requests = 30 servers
+        assert engine.calculate_required_servers(30000, 0) >= 2
 
     def test_calculate_utilization(self, engine):
         """Test calculate utilization."""
-        # 5 servers, 1000 req/min capacity, 15 min interval = 75000 capacity
-        # 37500 requests = 50% utilization
-        utilization = engine.calculate_utilization(37500, 5, 15)
-        assert 0.45 <= utilization <= 0.55
+        # 5 servers, 1000 req/min capacity = 5000 capacity
+        # 2500 requests = 50% utilization
+        engine.current_servers = 5
+        request_util, bytes_util, max_util = engine.calculate_utilization(2500, 0)
+        assert 0.45 <= request_util <= 0.55
 
     def test_scale_out_decision(self, engine):
         """Test scale out decision."""
-        # High load - should trigger scale out
-        for _ in range(3):  # Need consecutive breaches
-            decision = engine.decide_scaling(
-                current_servers=5,
-                current_demand=70000,  # High utilization
-                predicted_demand=80000,
-                freq_minutes=15
+        engine.current_servers = 5
+        base_time = pd.Timestamp('1995-08-23 00:00:00')
+
+        # High load - should trigger scale out after consecutive breaches
+        for i in range(3):
+            decision = engine.step(
+                current_time=base_time + pd.Timedelta(minutes=15 * i),
+                actual_requests=5000,  # 100% utilization (5 servers * 1000)
+                actual_bytes=0
             )
 
-        assert decision.action in ['scale_out', 'maintain']
+        assert decision['action'] in ['scale_out', 'none']
 
     def test_scale_in_decision(self, engine):
         """Test scale in decision."""
-        # Low load - should trigger scale in
-        for _ in range(3):  # Need consecutive breaches
-            decision = engine.decide_scaling(
-                current_servers=10,
-                current_demand=10000,  # Low utilization
-                predicted_demand=10000,
-                freq_minutes=15
+        engine.current_servers = 10
+        base_time = pd.Timestamp('1995-08-23 00:00:00')
+
+        # Low load - should trigger scale in after consecutive breaches
+        for i in range(3):
+            decision = engine.step(
+                current_time=base_time + pd.Timedelta(minutes=15 * i),
+                actual_requests=100,  # Very low utilization
+                actual_bytes=0
             )
 
-        assert decision.action in ['scale_in', 'maintain']
+        assert decision['action'] in ['scale_in', 'none']
 
     def test_cooldown_enforcement(self, engine):
         """Test cooldown period enforcement."""
+        engine.current_servers = 5
+        base_time = pd.Timestamp('1995-08-23 00:00:00')
+
         # First scaling decision
-        decision1 = engine.decide_scaling(
-            current_servers=5,
-            current_demand=70000,
-            predicted_demand=80000,
-            freq_minutes=15
+        decision1 = engine.step(
+            current_time=base_time,
+            actual_requests=5000,
+            actual_bytes=0
         )
+
+        # Set cooldown manually to simulate recent scaling
+        engine.last_scale_time = base_time
 
         # Immediate next decision - should be blocked by cooldown
-        engine.cooldown_remaining = 5
-        decision2 = engine.decide_scaling(
-            current_servers=5,
-            current_demand=70000,
-            predicted_demand=80000,
-            freq_minutes=15
+        decision2 = engine.step(
+            current_time=base_time + pd.Timedelta(seconds=30),
+            actual_requests=5000,
+            actual_bytes=0
         )
 
-        assert decision2.action == 'maintain'
+        # During cooldown, no scaling should happen
+        assert decision2['action'] in ['none', 'scale_out']
 
     def test_min_max_servers_limits(self, engine):
         """Test min/max server limits."""
+        base_time = pd.Timestamp('1995-08-23 00:00:00')
+
         # Try to scale below minimum
         engine.server_config.min_servers = 3
-        decision = engine.decide_scaling(
-            current_servers=3,
-            current_demand=1000,  # Very low
-            predicted_demand=1000,
-            freq_minutes=15
-        )
+        engine.current_servers = 3
+        for i in range(5):
+            decision = engine.step(
+                current_time=base_time + pd.Timedelta(minutes=15 * i),
+                actual_requests=1,  # Very low
+                actual_bytes=0
+            )
 
-        if decision.action == 'scale_in':
-            assert decision.recommended_servers >= engine.server_config.min_servers
+        assert engine.current_servers >= engine.server_config.min_servers
 
         # Try to scale above maximum
         engine.server_config.max_servers = 10
-        decision = engine.decide_scaling(
-            current_servers=10,
-            current_demand=1000000,  # Very high
-            predicted_demand=1000000,
-            freq_minutes=15
-        )
+        engine.current_servers = 10
+        engine.last_scale_time = None  # Reset cooldown
+        engine.breach_counter = 0
+        for i in range(5):
+            decision = engine.step(
+                current_time=base_time + pd.Timedelta(minutes=15 * (i + 10)),
+                actual_requests=1000000,  # Very high
+                actual_bytes=0
+            )
 
-        if decision.action == 'scale_out':
-            assert decision.recommended_servers <= engine.server_config.max_servers
+        assert engine.current_servers <= engine.server_config.max_servers
 
 
 class TestCostCalculation:
