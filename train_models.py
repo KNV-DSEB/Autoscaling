@@ -34,51 +34,41 @@ print(f"   Clean records: {len(df_clean)}")
 train, test = split_train_test(df_clean, test_start='1995-08-23')
 train_series = train['request_count']
 test_series = test['request_count']
+test_start = '1995-08-23'
 print(f"   Train: {len(train_series)}, Test: {len(test_series)}")
 
 # ========== SARIMA ==========
 print("\n2. Training SARIMA model (simplified params)...")
-# Use simpler parameters: no seasonal component for faster training
-# order=(2,1,2) without seasonal component
 sarima_model = SARIMAForecaster(
     order=(2, 1, 2),
     seasonal_order=None  # Skip seasonal for speed
 )
 
-# Train on subset for speed
-train_subset = train_series[-2000:]  # Last ~20 days
+train_subset = train_series[-2000:]
 sarima_model.fit(train_subset, verbose=False)
 
-# Predict
 sarima_pred = sarima_model.predict(steps=min(len(test_series), 96), return_conf_int=True)
 y_true_sarima = test_series.values[:len(sarima_pred)]
 y_pred_sarima = sarima_pred['forecast'].values
 
-# Metrics
 sarima_metrics = calculate_metrics(y_true_sarima, y_pred_sarima)
 print(f"   SARIMA Metrics: RMSE={sarima_metrics['RMSE']:.2f}, MAE={sarima_metrics['MAE']:.2f}")
 
-# Save
 sarima_model.save('models/sarima_15min.pkl')
 print("   Saved: models/sarima_15min.pkl")
 
 # ========== LightGBM ==========
 print("\n3. Training LightGBM model...")
-# Feature engineering
 fe = TimeSeriesFeatureEngineer(df_clean)
 df_features = fe.create_all_features(target_col='request_count', granularity='15min')
 
-# Prepare supervised data
 feature_cols = fe.get_feature_columns(df_features)
 X, y = fe.prepare_supervised(df_features, 'request_count', feature_cols, forecast_horizon=1)
 
-# Split
-test_start = '1995-08-23'
 train_mask = X.index < test_start
 X_train, X_test = X[train_mask], X[~train_mask]
 y_train, y_test = y[train_mask], y[~train_mask]
 
-# Train LightGBM
 lgb_model = LightGBMForecaster(
     params={
         'objective': 'regression',
@@ -91,21 +81,19 @@ lgb_model = LightGBMForecaster(
 )
 lgb_model.fit(X_train, y_train)
 
-# Predict
 lgb_pred = lgb_model.predict(X_test)
 lgb_metrics = calculate_metrics(y_test.values, lgb_pred)
 print(f"   LightGBM Metrics: RMSE={lgb_metrics['RMSE']:.2f}, MAE={lgb_metrics['MAE']:.2f}")
 
-# Save
 lgb_model.save('models/lightgbm_15min.pkl')
 print("   Saved: models/lightgbm_15min.pkl")
 
 # ========== Prophet ==========
 print("\n4. Training Prophet model...")
+prophet_metrics = None
 try:
     from src.models.prophet_forecaster import ProphetForecaster
 
-    # Prepare Prophet data format
     prophet_train = pd.DataFrame({
         'ds': train_series.index,
         'y': train_series.values
@@ -114,7 +102,6 @@ try:
     prophet_model = ProphetForecaster()
     prophet_model.fit(prophet_train)
 
-    # Predict
     prophet_pred = prophet_model.predict(periods=min(len(test_series), 96))
     y_true_prophet = test_series.values[:len(prophet_pred)]
     y_pred_prophet = prophet_pred['yhat'].values
@@ -122,37 +109,16 @@ try:
     prophet_metrics = calculate_metrics(y_true_prophet, y_pred_prophet)
     print(f"   Prophet Metrics: RMSE={prophet_metrics['RMSE']:.2f}, MAE={prophet_metrics['MAE']:.2f}")
 
-    # Save
     prophet_model.save('models/prophet_15min.pkl')
     print("   Saved: models/prophet_15min.pkl")
 except Exception as e:
     print(f"   Prophet training failed: {e}")
-
-# ========== Summary ==========
-print("\n" + "="*60)
-print("           TRAINING COMPLETE!")
-print("="*60)
-print("\nrequest_count Models saved:")
-print("  - models/sarima_15min.pkl")
-print("  - models/lightgbm_15min.pkl")
-print("  - models/prophet_15min.pkl")
-print("\nbytes_total Models saved:")
-print("  - models/sarima_bytes_15min.pkl")
-print("  - models/lightgbm_bytes_15min.pkl")
-print("  - models/prophet_bytes_15min.pkl")
-print("\nMetrics Summary (request_count):")
-print(f"  SARIMA: RMSE={sarima_metrics['RMSE']:.2f}, MAE={sarima_metrics['MAE']:.2f}, MAPE={sarima_metrics['MAPE']:.2f}%")
-print(f"  LightGBM: RMSE={lgb_metrics['RMSE']:.2f}, MAE={lgb_metrics['MAE']:.2f}, MAPE={lgb_metrics['MAPE']:.2f}%")
-print("\nMetrics Summary (bytes_total):")
-print(f"  SARIMA: RMSE={sarima_bytes_metrics['RMSE']:.2f}, MAE={sarima_bytes_metrics['MAE']:.2f}, MAPE={sarima_bytes_metrics['MAPE']:.2f}%")
-print(f"  LightGBM: RMSE={lgb_bytes_metrics['RMSE']:.2f}, MAE={lgb_bytes_metrics['MAE']:.2f}, MAPE={lgb_bytes_metrics['MAPE']:.2f}%")
 
 # ========== BYTES_TOTAL MODELS ==========
 print("\n" + "="*60)
 print("           TRAINING BYTES_TOTAL MODELS")
 print("="*60)
 
-# Prepare bytes_total data
 train_bytes = train['bytes_total']
 test_bytes = test['bytes_total']
 print(f"\nbytes_total Train: {len(train_bytes)}, Test: {len(test_bytes)}")
@@ -161,7 +127,7 @@ print(f"\nbytes_total Train: {len(train_bytes)}, Test: {len(test_bytes)}")
 print("\n5. Training SARIMA on bytes_total...")
 sarima_bytes = SARIMAForecaster(
     order=(2, 1, 2),
-    seasonal_order=(1, 1, 0, 96)  # Using (1,1,0,96) to avoid memory issues
+    seasonal_order=None  # Skip seasonal for speed
 )
 
 train_bytes_subset = train_bytes[-2000:]
@@ -210,6 +176,7 @@ print("   Saved: models/lightgbm_bytes_15min.pkl")
 
 # ========== Prophet for bytes_total ==========
 print("\n7. Training Prophet on bytes_total...")
+prophet_bytes_metrics = None
 try:
     from src.models.prophet_forecaster import ProphetForecaster
 
@@ -232,3 +199,29 @@ try:
     print("   Saved: models/prophet_bytes_15min.pkl")
 except Exception as e:
     print(f"   Prophet bytes_total training failed: {e}")
+
+# ========== Summary ==========
+print("\n" + "="*60)
+print("           TRAINING COMPLETE!")
+print("="*60)
+print("\nrequest_count Models saved:")
+print("  - models/sarima_15min.pkl")
+print("  - models/lightgbm_15min.pkl")
+if prophet_metrics:
+    print("  - models/prophet_15min.pkl")
+print("\nbytes_total Models saved:")
+print("  - models/sarima_bytes_15min.pkl")
+print("  - models/lightgbm_bytes_15min.pkl")
+if prophet_bytes_metrics:
+    print("  - models/prophet_bytes_15min.pkl")
+print("\nMetrics Summary (request_count):")
+print(f"  SARIMA: RMSE={sarima_metrics['RMSE']:.2f}, MAE={sarima_metrics['MAE']:.2f}, MAPE={sarima_metrics['MAPE']:.2f}%")
+print(f"  LightGBM: RMSE={lgb_metrics['RMSE']:.2f}, MAE={lgb_metrics['MAE']:.2f}, MAPE={lgb_metrics['MAPE']:.2f}%")
+if prophet_metrics:
+    print(f"  Prophet: RMSE={prophet_metrics['RMSE']:.2f}, MAE={prophet_metrics['MAE']:.2f}, MAPE={prophet_metrics['MAPE']:.2f}%")
+print("\nMetrics Summary (bytes_total):")
+print(f"  SARIMA: RMSE={sarima_bytes_metrics['RMSE']:.2f}, MAE={sarima_bytes_metrics['MAE']:.2f}, MAPE={sarima_bytes_metrics['MAPE']:.2f}%")
+print(f"  LightGBM: RMSE={lgb_bytes_metrics['RMSE']:.2f}, MAE={lgb_bytes_metrics['MAE']:.2f}, MAPE={lgb_bytes_metrics['MAPE']:.2f}%")
+if prophet_bytes_metrics:
+    print(f"  Prophet: RMSE={prophet_bytes_metrics['RMSE']:.2f}, MAE={prophet_bytes_metrics['MAE']:.2f}, MAPE={prophet_bytes_metrics['MAPE']:.2f}%")
+print("="*60)
