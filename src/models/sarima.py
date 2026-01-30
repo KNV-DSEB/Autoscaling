@@ -171,7 +171,9 @@ class SARIMAForecaster:
             self.fitted_model = self.model.fit(
                 disp=verbose,
                 maxiter=maxiter,
-                method='lbfgs'
+                method='lbfgs',
+                low_memory=True,
+                cov_type='none',
             )
 
         if verbose:

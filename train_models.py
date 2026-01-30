@@ -132,10 +132,103 @@ except Exception as e:
 print("\n" + "="*60)
 print("           TRAINING COMPLETE!")
 print("="*60)
-print("\nModels saved:")
+print("\nrequest_count Models saved:")
 print("  - models/sarima_15min.pkl")
 print("  - models/lightgbm_15min.pkl")
 print("  - models/prophet_15min.pkl")
-print("\nMetrics Summary:")
+print("\nbytes_total Models saved:")
+print("  - models/sarima_bytes_15min.pkl")
+print("  - models/lightgbm_bytes_15min.pkl")
+print("  - models/prophet_bytes_15min.pkl")
+print("\nMetrics Summary (request_count):")
 print(f"  SARIMA: RMSE={sarima_metrics['RMSE']:.2f}, MAE={sarima_metrics['MAE']:.2f}, MAPE={sarima_metrics['MAPE']:.2f}%")
 print(f"  LightGBM: RMSE={lgb_metrics['RMSE']:.2f}, MAE={lgb_metrics['MAE']:.2f}, MAPE={lgb_metrics['MAPE']:.2f}%")
+print("\nMetrics Summary (bytes_total):")
+print(f"  SARIMA: RMSE={sarima_bytes_metrics['RMSE']:.2f}, MAE={sarima_bytes_metrics['MAE']:.2f}, MAPE={sarima_bytes_metrics['MAPE']:.2f}%")
+print(f"  LightGBM: RMSE={lgb_bytes_metrics['RMSE']:.2f}, MAE={lgb_bytes_metrics['MAE']:.2f}, MAPE={lgb_bytes_metrics['MAPE']:.2f}%")
+
+# ========== BYTES_TOTAL MODELS ==========
+print("\n" + "="*60)
+print("           TRAINING BYTES_TOTAL MODELS")
+print("="*60)
+
+# Prepare bytes_total data
+train_bytes = train['bytes_total']
+test_bytes = test['bytes_total']
+print(f"\nbytes_total Train: {len(train_bytes)}, Test: {len(test_bytes)}")
+
+# ========== SARIMA for bytes_total ==========
+print("\n5. Training SARIMA on bytes_total...")
+sarima_bytes = SARIMAForecaster(
+    order=(2, 1, 2),
+    seasonal_order=(1, 1, 0, 96)  # Using (1,1,0,96) to avoid memory issues
+)
+
+train_bytes_subset = train_bytes[-2000:]
+sarima_bytes.fit(train_bytes_subset, verbose=False)
+
+sarima_bytes_pred = sarima_bytes.predict(steps=min(len(test_bytes), 96), return_conf_int=True)
+y_true_sarima_bytes = test_bytes.values[:len(sarima_bytes_pred)]
+y_pred_sarima_bytes = sarima_bytes_pred['forecast'].values
+
+sarima_bytes_metrics = calculate_metrics(y_true_sarima_bytes, y_pred_sarima_bytes)
+print(f"   SARIMA bytes_total: RMSE={sarima_bytes_metrics['RMSE']:.2f}, MAE={sarima_bytes_metrics['MAE']:.2f}")
+
+sarima_bytes.save('models/sarima_bytes_15min.pkl')
+print("   Saved: models/sarima_bytes_15min.pkl")
+
+# ========== LightGBM for bytes_total ==========
+print("\n6. Training LightGBM on bytes_total...")
+fe_bytes = TimeSeriesFeatureEngineer(df_clean)
+df_features_bytes = fe_bytes.create_all_features(target_col='bytes_total', granularity='15min')
+
+feature_cols_bytes = fe_bytes.get_feature_columns(df_features_bytes)
+X_bytes, y_bytes = fe_bytes.prepare_supervised(df_features_bytes, 'bytes_total', feature_cols_bytes, forecast_horizon=1)
+
+train_mask_bytes = X_bytes.index < test_start
+X_train_bytes, X_test_bytes = X_bytes[train_mask_bytes], X_bytes[~train_mask_bytes]
+y_train_bytes, y_test_bytes = y_bytes[train_mask_bytes], y_bytes[~train_mask_bytes]
+
+lgb_bytes = LightGBMForecaster(
+    params={
+        'objective': 'regression',
+        'metric': 'rmse',
+        'verbosity': -1,
+        'n_estimators': 200,
+        'learning_rate': 0.05,
+        'num_leaves': 31
+    }
+)
+lgb_bytes.fit(X_train_bytes, y_train_bytes)
+
+lgb_bytes_pred = lgb_bytes.predict(X_test_bytes)
+lgb_bytes_metrics = calculate_metrics(y_test_bytes.values, lgb_bytes_pred)
+print(f"   LightGBM bytes_total: RMSE={lgb_bytes_metrics['RMSE']:.2f}, MAE={lgb_bytes_metrics['MAE']:.2f}")
+
+lgb_bytes.save('models/lightgbm_bytes_15min.pkl')
+print("   Saved: models/lightgbm_bytes_15min.pkl")
+
+# ========== Prophet for bytes_total ==========
+print("\n7. Training Prophet on bytes_total...")
+try:
+    from src.models.prophet_forecaster import ProphetForecaster
+
+    prophet_train_bytes = pd.DataFrame({
+        'ds': train_bytes.index,
+        'y': train_bytes.values
+    })
+
+    prophet_bytes = ProphetForecaster()
+    prophet_bytes.fit(prophet_train_bytes)
+
+    prophet_bytes_pred = prophet_bytes.predict(periods=min(len(test_bytes), 96))
+    y_true_prophet_bytes = test_bytes.values[:len(prophet_bytes_pred)]
+    y_pred_prophet_bytes = prophet_bytes_pred['yhat'].values
+
+    prophet_bytes_metrics = calculate_metrics(y_true_prophet_bytes, y_pred_prophet_bytes)
+    print(f"   Prophet bytes_total: RMSE={prophet_bytes_metrics['RMSE']:.2f}, MAE={prophet_bytes_metrics['MAE']:.2f}")
+
+    prophet_bytes.save('models/prophet_bytes_15min.pkl')
+    print("   Saved: models/prophet_bytes_15min.pkl")
+except Exception as e:
+    print(f"   Prophet bytes_total training failed: {e}")
